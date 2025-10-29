@@ -23,9 +23,6 @@ pub enum JobQueueError {
     #[error("Invalid job state: {0}")]
     InvalidJobState(String),
 
-    #[error("Configuration error: {0}")]
-    ConfigError(String),
-
     #[error("Worker error: {0}")]
     WorkerError(String),
 }
@@ -35,5 +32,11 @@ pub type Result<T> = std::result::Result<T, JobQueueError>;
 impl From<lapin::Error> for JobQueueError {
     fn from(value: lapin::Error) -> Self {
         JobQueueError::QueueError(value.to_string())
+    }
+}
+
+impl From<reqwest::Error> for JobQueueError {
+    fn from(value: reqwest::Error) -> Self {
+        JobQueueError::HandlerError(value.to_string())
     }
 }

@@ -1,9 +1,10 @@
 use crate::{
-    ConcurrentWorker, Job, JobQueue, JobQueueError, JobStorage, RabbitMQQueue, RedisStorage, Result,
+    ConcurrentWorker, Job, JobOptions, JobQueue, JobQueueError, JobStorage, RabbitMQQueue,
+    RedisStorage, Result,
 };
 use std::sync::Arc;
-use std::time::Duration;
 
+#[derive(Debug, Clone)]
 pub struct Queue {
     name: String,
     queue: Arc<RabbitMQQueue>,
@@ -76,6 +77,7 @@ impl Queue {
     }
 }
 
+#[derive(Clone)]
 pub struct Worker {
     worker: Arc<ConcurrentWorker<RedisStorage, RabbitMQQueue>>,
     queue_name: String,
@@ -99,7 +101,7 @@ impl Worker {
     /// Process a job type with async handler
     pub async fn process_async<F, Fut, T>(&self, job_type: &str, handler: F) -> Result<()>
     where
-        F: Fn(T) -> Fut + Send + Sync + Copy + 'static,
+        F: Fn(T) -> Fut + Send + Sync + Clone + 'static,
         Fut: std::future::Future<Output = Result<()>> + Send + 'static,
         T: for<'de> serde::Deserialize<'de> + Send + 'static,
     {
@@ -113,7 +115,7 @@ impl Worker {
     /// Process sync functions (CPU-bound operations)
     pub async fn process_sync<F, T>(&self, job_type: &str, handler: F) -> Result<()>
     where
-        F: Fn(T) -> Result<()> + Send + Sync + Copy + 'static,
+        F: Fn(T) -> Result<()> + Send + Sync + Clone + 'static,
         T: for<'de> serde::Deserialize<'de> + Send + 'static,
     {
         self.worker.register_sync_handler(job_type, handler).await?;
@@ -132,33 +134,25 @@ impl Worker {
         self.worker.stop().await;
         Ok(())
     }
-}
 
-#[derive(Debug, Clone)]
-pub struct JobOptions {
-    pub delay: Option<Duration>,
-    pub priority: i32,
-    pub attempts: u32,
-    pub backoff: BackoffOptions,
-    pub max_retries: u32,
-}
+    // Get the number of currently active tasks
+    pub fn get_active_tasks_count(&self) -> usize {
+        self.worker.get_active_task_count()
+    }
 
-impl Default for JobOptions {
-    fn default() -> Self {
-        Self {
-            delay: None,
-            priority: 1,
-            attempts: 3,
-            backoff: BackoffOptions::Fixed(Duration::from_secs(5)),
-            max_retries: 3,
+    // Get the number of available current slots
+    pub fn get_available_slots(&self) -> usize {
+        self.worker.get_available_slots()
+    }
+
+    // Get worker metrics
+    pub fn get_metrics(&self) -> WorkerMetrics {
+        WorkerMetrics {
+            active_tasks: self.get_active_tasks_count(),
+            available_slots: self.get_available_slots(),
+            max_concurrency: self.worker.max_concurrent_tasks,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum BackoffOptions {
-    Fixed(Duration),
-    Exponential(Duration),
 }
 
 #[derive(Debug, Clone)]
@@ -170,4 +164,11 @@ impl Default for WorkerOptions {
     fn default() -> Self {
         Self { concurrency: 5 }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkerMetrics {
+    pub active_tasks: usize,
+    pub available_slots: usize,
+    pub max_concurrency: usize,
 }

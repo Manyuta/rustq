@@ -65,7 +65,7 @@ pub mod storage;
 pub mod worker;
 
 pub use error::{JobQueueError, Result};
-pub use job::{BackoffStrategy, Job, JobStatus};
+pub use job::{BackoffStrategy, Job, JobOptions, JobStatus};
 pub use queue::{JobQueue, RabbitMQQueue};
 pub use queue_client::*;
 pub use storage::{JobStorage, RedisStorage};

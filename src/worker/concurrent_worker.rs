@@ -4,7 +4,10 @@ use lapin::options::{BasicAckOptions, BasicNackOptions};
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tokio::sync::{RwLock, Semaphore, broadcast};
 use uuid::Uuid;
 
@@ -19,6 +22,8 @@ pub struct ConcurrentWorker<S, Q> {
     running: Arc<RwLock<bool>>,
     shutdown_tx: tokio::sync::broadcast::Sender<()>, // To properly shut-down worker when there is no messages left
     worker_id: String,
+    active_tasks: Arc<AtomicUsize>,
+    pub max_concurrent_tasks: usize,
 }
 
 impl<S, Q> ConcurrentWorker<S, Q>
@@ -38,17 +43,20 @@ where
             running: Arc::new(RwLock::new(false)),
             shutdown_tx,
             worker_id,
+            active_tasks: Arc::new(AtomicUsize::new(0)),
+            max_concurrent_tasks,
         }
     }
 
     pub async fn register_async_handler<F, Fut, T>(&self, job_type: &str, handler: F) -> Result<()>
     where
-        F: Fn(T) -> Fut + Send + Sync + Copy + 'static,
+        F: Fn(T) -> Fut + Send + Sync + Clone + 'static,
         Fut: Future<Output = Result<()>> + Send + 'static,
         T: for<'de> serde::Deserialize<'de> + Send + 'static,
     {
         let boxed_handler: AsyncJobHandler = Box::new(move |job: Job| {
-            let handler = handler;
+            let handler = handler.clone();
+
             Box::pin(async move {
                 let data: T = serde_json::from_slice(&job.payload)
                     .map_err(|e| JobQueueError::DeserializationError(e.to_string()))?;
@@ -65,13 +73,14 @@ where
         Ok(())
     }
 
+    // For heavy CPU tasks that block the thread
     pub async fn register_sync_handler<F, T>(&self, job_type: &str, handler: F) -> Result<()>
     where
-        F: Fn(T) -> Result<()> + Send + Sync + Copy + 'static,
+        F: Fn(T) -> Result<()> + Send + Sync + Clone + 'static,
         T: for<'de> serde::Deserialize<'de> + Send + 'static,
     {
         let boxed_handler: AsyncJobHandler = Box::new(move |job: Job| {
-            let handler = handler;
+            let handler = handler.clone();
             Box::pin(async move {
                 let data: T = serde_json::from_slice(&job.payload)
                     .map_err(|e| JobQueueError::DeserializationError(e.to_string()))?;
@@ -116,6 +125,7 @@ where
         info!("All workers stopped for worker {}", self.worker_id);
     }
 
+    // A single worker loop
     async fn worker_loop(&self, worker_id: usize, queue_name: &str) {
         info!("Worker {}-{} started", self.worker_id, worker_id);
 
@@ -133,6 +143,9 @@ where
             }
         };
 
+        // Monitor concurrency of the worker
+        let monitor_handle = self.start_concurrency_monitor();
+
         while *self.running.read().await {
             tokio::select! {
                 delivery = consumer.next() => {
@@ -146,6 +159,9 @@ where
                                 }
                             };
 
+                            // Increment active task counter
+                            self.active_tasks.fetch_add(1, Ordering::SeqCst);
+
                             let worker = self.clone();
                             let queue_name = queue_name.to_string();
 
@@ -154,6 +170,9 @@ where
                                 if let Err(e) = worker.process_delivery(delivery, &queue_name).await {
                                     error!("Error processing delivery: {}", e);
                                 }
+
+                                // Decrement active task counter
+                                worker.active_tasks.fetch_sub(1, Ordering::SeqCst);
                                 drop(permit);
                             });
                         }
@@ -173,6 +192,9 @@ where
                 }
             }
         }
+
+        // Stop the monitor
+        drop(monitor_handle);
 
         info!("Worker {}-{} stopped", self.worker_id, worker_id);
     }
@@ -276,7 +298,13 @@ where
                 job.retry_count + 1
             );
 
+            // Update retry count
             job = job.with_retry(Some(error_msg));
+
+            // Store the job in storage with the new retry count
+            if let Err(e) = self.storage.store_job(&job).await {
+                error!("Failed to store job with id: {}, error: {}", &job.id, e);
+            }
 
             if let Err(e) = self
                 .queue
@@ -329,6 +357,40 @@ where
 
         Ok(queue_health && storage_health)
     }
+
+    // Concurrency monitor helper function
+    fn start_concurrency_monitor(&self) -> tokio::task::JoinHandle<()> {
+        let active_tasks = self.active_tasks.clone();
+        let max_concurrent = self.max_concurrent_tasks;
+        let worker_id = self.worker_id.clone();
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(2));
+            loop {
+                interval.tick().await;
+                let active = active_tasks.load(Ordering::SeqCst);
+                let available = max_concurrent.saturating_sub(active);
+                println!(
+                    "[MONITOR] Worker {} - Active: {}/{} (Available: {})",
+                    worker_id, active, max_concurrent, available
+                );
+
+                // Alert if we're at capacity
+                if available == 0 {
+                    println!("Worker {} at maximum concurrency!", worker_id);
+                }
+            }
+        })
+    }
+
+    pub fn get_active_task_count(&self) -> usize {
+        self.active_tasks.load(Ordering::SeqCst)
+    }
+
+    pub fn get_available_slots(&self) -> usize {
+        let active = self.active_tasks.load(Ordering::SeqCst);
+        self.max_concurrent_tasks.saturating_sub(active)
+    }
 }
 
 impl<S, Q> Clone for ConcurrentWorker<S, Q> {
@@ -341,6 +403,8 @@ impl<S, Q> Clone for ConcurrentWorker<S, Q> {
             running: self.running.clone(),
             shutdown_tx: self.shutdown_tx.clone(),
             worker_id: self.worker_id.clone(),
+            active_tasks: self.active_tasks.clone(),
+            max_concurrent_tasks: self.max_concurrent_tasks,
         }
     }
 }
