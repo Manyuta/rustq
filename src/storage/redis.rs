@@ -154,11 +154,11 @@ impl JobStorage for RedisStorage {
             .map_err(|e| JobQueueError::StorageError(e.to_string()))?;
 
         // Update indexes if job exists and status changed
-        if let (Some(old_status), Some(job)) = (old_status, self.get_job(job_id).await?) {
-            if old_status != new_status {
-                self.update_job_indexes(&job, Some(old_status), new_status)
-                    .await?;
-            }
+        if let (Some(old_status), Some(job)) = (old_status, self.get_job(job_id).await?)
+            && old_status != new_status
+        {
+            self.update_job_indexes(&job, Some(old_status), new_status)
+                .await?;
         }
 
         Ok(())
@@ -214,14 +214,11 @@ impl JobStorage for RedisStorage {
             .map_err(|e| JobQueueError::StorageError(e.to_string()))?;
 
         let mut jobs = Vec::new();
-        for data in job_data {
-            if let Some(json) = data {
-                if let Ok(job) = serde_json::from_str(&json) {
-                    jobs.push(job);
-                }
+        for json in job_data.into_iter().flatten() {
+            if let Ok(job) = serde_json::from_str(&json) {
+                jobs.push(job);
             }
         }
-
         Ok(jobs)
     }
 }

@@ -1,4 +1,4 @@
 //! Worker implementations for processing jobs
 
-pub mod worker;
-pub use worker::Worker;
+pub mod concurrent_worker;
+pub use concurrent_worker::ConcurrentWorker;

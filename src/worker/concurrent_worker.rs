@@ -5,28 +5,30 @@ use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use std::future::Future;
 use std::sync::Arc;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{RwLock, Semaphore, broadcast};
 use uuid::Uuid;
 
 pub type AsyncJobHandler =
     Box<dyn Fn(Job) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>> + Send + Sync>;
 
-pub struct Worker<S, Q> {
+pub struct ConcurrentWorker<S, Q> {
     queue: Arc<Q>,
     storage: Arc<S>,
     handlers: Arc<RwLock<HashMap<String, AsyncJobHandler>>>,
     task_semaphore: Arc<Semaphore>,
     running: Arc<RwLock<bool>>,
+    shutdown_tx: tokio::sync::broadcast::Sender<()>, // To properly shut-down worker when there is no messages left
     worker_id: String,
 }
 
-impl<S, Q> Worker<S, Q>
+impl<S, Q> ConcurrentWorker<S, Q>
 where
     S: JobStorage + Send + Sync + 'static,
     Q: JobQueue + Send + Sync + 'static,
 {
     pub fn new(queue: Q, storage: S, max_concurrent_tasks: usize) -> Self {
         let worker_id = Uuid::new_v4().to_string();
+        let (shutdown_tx, _) = broadcast::channel(1);
 
         Self {
             queue: Arc::new(queue),
@@ -34,6 +36,7 @@ where
             handlers: Arc::new(RwLock::new(HashMap::new())),
             task_semaphore: Arc::new(Semaphore::new(max_concurrent_tasks)),
             running: Arc::new(RwLock::new(false)),
+            shutdown_tx,
             worker_id,
         }
     }
@@ -74,7 +77,6 @@ where
                     .map_err(|e| JobQueueError::DeserializationError(e.to_string()))?;
 
                 // Run sync handler in blocking task
-                // ?? If every task has its thread, do we need to add spawn_blocking?
                 tokio::task::spawn_blocking(move || handler(data))
                     .await
                     .map_err(|e| JobQueueError::HandlerError(e.to_string()))?
@@ -118,6 +120,7 @@ where
         info!("Worker {}-{} started", self.worker_id, worker_id);
 
         let consumer_tag = format!("{}_{}", self.worker_id, worker_id);
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
 
         let mut consumer = match self.queue.get_consumer(queue_name, &consumer_tag).await {
             Ok(c) => c,
@@ -131,40 +134,41 @@ where
         };
 
         while *self.running.read().await {
-            match consumer.next().await {
-                Some(Ok(delivery)) => {
-                    let permit = match self.task_semaphore.clone().acquire_owned().await {
-                        Ok(permit) => permit,
-                        Err(_) => {
-                            warn!("Worker {}-{} semaphore closed", self.worker_id, worker_id);
+            tokio::select! {
+                delivery = consumer.next() => {
+                    match delivery {
+                        Some(Ok(delivery)) => {
+                            let permit = match self.task_semaphore.clone().acquire_owned().await {
+                                Ok(permit) => permit,
+                                Err(_) => {
+                                    warn!("Worker {}-{} semaphore closed", self.worker_id, worker_id);
+                                    break;
+                                }
+                            };
+
+                            let worker = self.clone();
+                            let queue_name = queue_name.to_string();
+
+                            tokio::spawn(async move {
+                                // Process delivery while holding the permit
+                                if let Err(e) = worker.process_delivery(delivery, &queue_name).await {
+                                    error!("Error processing delivery: {}", e);
+                                }
+                                drop(permit);
+                            });
+                        }
+                        Some(Err(e)) => {
+                            error!("Worker {}-{} delivery error: {}", self.worker_id, worker_id, e);
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                        }
+                        None => {
+                            warn!("Worker {}-{} consumer connection broken", self.worker_id, worker_id);
                             break;
                         }
-                    };
-
-                    let worker = self.clone();
-                    let queue_name = queue_name.to_string();
-
-                    tokio::spawn(async move {
-                        // Process the delivery while holding the permit
-                        // The permit will be realsed when dropped
-                        if let Err(e) = worker.process_delivery(delivery, &queue_name).await {
-                            error!("Error processing delivery: {}", e);
-                        }
-                        drop(permit);
-                    });
+                    }
                 }
-                Some(Err(e)) => {
-                    error!(
-                        "Worker {}-{} delivery error: {}",
-                        self.worker_id, worker_id, e
-                    );
-                    // tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                }
-                None => {
-                    warn!(
-                        "Worker {}-{} consumer connection broken",
-                        self.worker_id, worker_id
-                    );
+                _ = shutdown_rx.recv() => {
+                    info!("Worker {}-{} received shutdown signal", self.worker_id, worker_id);
                     break;
                 }
             }
@@ -315,6 +319,7 @@ where
 
     pub async fn stop(&self) {
         *self.running.write().await = false;
+        let _ = self.shutdown_tx.send(());
         info!("Worker {} stopped", self.worker_id);
     }
 
@@ -326,7 +331,7 @@ where
     }
 }
 
-impl<S, Q> Clone for Worker<S, Q> {
+impl<S, Q> Clone for ConcurrentWorker<S, Q> {
     fn clone(&self) -> Self {
         Self {
             queue: self.queue.clone(),
@@ -334,6 +339,7 @@ impl<S, Q> Clone for Worker<S, Q> {
             handlers: self.handlers.clone(),
             task_semaphore: self.task_semaphore.clone(),
             running: self.running.clone(),
+            shutdown_tx: self.shutdown_tx.clone(),
             worker_id: self.worker_id.clone(),
         }
     }
