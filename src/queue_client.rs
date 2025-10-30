@@ -90,7 +90,7 @@ impl Worker {
         queue_name: &str,
         opts: WorkerOptions,
     ) -> Result<Self> {
-        let worker = ConcurrentWorker::new((*queue).clone(), (*storage).clone(), opts.concurrency);
+        let worker = ConcurrentWorker::new((*queue).clone(), (*storage).clone(), opts);
 
         Ok(Self {
             worker: Arc::new(worker),
@@ -158,11 +158,15 @@ impl Worker {
 #[derive(Debug, Clone)]
 pub struct WorkerOptions {
     pub concurrency: usize,
+    pub num_workers: usize,
 }
 
 impl Default for WorkerOptions {
     fn default() -> Self {
-        Self { concurrency: 5 }
+        Self {
+            concurrency: 5,
+            num_workers: 3,
+        }
     }
 }
 

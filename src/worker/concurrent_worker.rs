@@ -1,4 +1,4 @@
-use crate::{Job, JobQueue, JobQueueError, JobStatus, JobStorage, Result};
+use crate::{Job, JobQueue, JobQueueError, JobStatus, JobStorage, Result, WorkerOptions};
 use futures_util::stream::StreamExt;
 use lapin::options::{BasicAckOptions, BasicNackOptions};
 use log::{debug, error, info, warn};
@@ -24,6 +24,7 @@ pub struct ConcurrentWorker<S, Q> {
     worker_id: String,
     active_tasks: Arc<AtomicUsize>,
     pub max_concurrent_tasks: usize,
+    pub num_workers: usize,
 }
 
 impl<S, Q> ConcurrentWorker<S, Q>
@@ -31,7 +32,7 @@ where
     S: JobStorage + Send + Sync + 'static,
     Q: JobQueue + Send + Sync + 'static,
 {
-    pub fn new(queue: Q, storage: S, max_concurrent_tasks: usize) -> Self {
+    pub fn new(queue: Q, storage: S, opts: WorkerOptions) -> Self {
         let worker_id = Uuid::new_v4().to_string();
         let (shutdown_tx, _) = broadcast::channel(1);
 
@@ -39,12 +40,13 @@ where
             queue: Arc::new(queue),
             storage: Arc::new(storage),
             handlers: Arc::new(RwLock::new(HashMap::new())),
-            task_semaphore: Arc::new(Semaphore::new(max_concurrent_tasks)),
+            task_semaphore: Arc::new(Semaphore::new(opts.concurrency)),
             running: Arc::new(RwLock::new(false)),
             shutdown_tx,
             worker_id,
             active_tasks: Arc::new(AtomicUsize::new(0)),
-            max_concurrent_tasks,
+            max_concurrent_tasks: opts.concurrency,
+            num_workers: opts.num_workers,
         }
     }
 
@@ -415,6 +417,7 @@ impl<S, Q> Clone for ConcurrentWorker<S, Q> {
             worker_id: self.worker_id.clone(),
             active_tasks: self.active_tasks.clone(),
             max_concurrent_tasks: self.max_concurrent_tasks,
+            num_workers: self.num_workers,
         }
     }
 }
