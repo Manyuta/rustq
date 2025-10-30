@@ -60,13 +60,13 @@
 pub mod error;
 pub mod job;
 pub mod queue;
-pub mod queue_client;
+pub mod queue_wrapper;
 pub mod storage;
 pub mod worker;
 
 pub use error::{JobQueueError, Result};
 pub use job::{BackoffStrategy, Job, JobOptions, JobStatus};
 pub use queue::{JobQueue, RabbitMQQueue};
-pub use queue_client::*;
+pub use queue_wrapper::*;
 pub use storage::{JobStorage, RedisStorage};
 pub use worker::*;
