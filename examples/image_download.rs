@@ -73,7 +73,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn download_image(job: DownloadJob) -> Result<(), JobQueueError> {
-    // Fetch the image asynchronously
     let bytes = reqwest::get(&job.url).await?.bytes().await?;
 
     let save_dir = job.save_dir.clone();
@@ -85,12 +84,10 @@ async fn download_image(job: DownloadJob) -> Result<(), JobQueueError> {
         .to_string();
     let save_path = std::path::Path::new(&save_dir).join(filename);
 
-    // Ensure the directory exists asynchronously
     tokio::fs::create_dir_all(&save_dir)
         .await
         .expect("Failed to create dir");
 
-    // Create and write the file asynchronously
     let mut file = tokio::fs::File::create(&save_path)
         .await
         .expect("Failed to create file");

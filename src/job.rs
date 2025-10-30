@@ -165,7 +165,7 @@ impl BackoffStrategy {
 #[derive(Debug, Clone)]
 pub struct JobOptions {
     pub delay: Option<Duration>,
-    pub priority: i32,
+    //pub priority: i32,
     pub attempts: u32,
     pub backoff: BackoffOptions,
     pub max_retries: u32,
@@ -175,7 +175,7 @@ impl Default for JobOptions {
     fn default() -> Self {
         Self {
             delay: None,
-            priority: 1,
+            //priority: 1,
             attempts: 3,
             backoff: BackoffOptions::Fixed(Duration::from_secs(5)),
             max_retries: 3,
