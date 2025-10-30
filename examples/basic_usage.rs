@@ -74,8 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     worker
         .process_sync("process_data", |data: ProcessData| {
             println!("Processing data with complexity: {}", data.complexity);
-            // Simulate CPU-intensive work
 
+            // Simulate CPU-intensive work
             std::thread::sleep(Duration::from_millis(500));
 
             println!("Data processed: {}", data.input);
