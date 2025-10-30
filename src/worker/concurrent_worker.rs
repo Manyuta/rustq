@@ -111,6 +111,8 @@ where
 
         *self.running.write().await = true;
 
+        let monitor_handle = self.start_concurrency_monitor();
+
         let mut worker_handles = Vec::new();
 
         for worker_id in 0..num_workers {
@@ -125,6 +127,8 @@ where
 
         futures::future::join_all(worker_handles).await;
         info!("All workers stopped for worker {}", self.worker_id);
+
+        drop(monitor_handle);
     }
 
     // A single worker loop
@@ -141,21 +145,18 @@ where
                     "Worker {}-{} failed to create consumer: {}",
                     self.worker_id, worker_id, e
                 );
-
                 return;
             }
         };
 
-        // Monitor concurrency of the worker
-        let monitor_handle = self.start_concurrency_monitor();
+        // Monitor concurrency of the worker (moved to .start())
+        //   let monitor_handle = self.start_concurrency_monitor();
 
         while *self.running.read().await {
             tokio::select! {
                 delivery = consumer.next() => {
                     match delivery {
                         Some(Ok(delivery)) => {
-
-
                             let permit = match self.task_semaphore.clone().acquire_owned().await {
                                 Ok(permit) => permit,
                                 Err(_) => {
@@ -166,7 +167,6 @@ where
 
                             // Increment active task counter
                             self.active_tasks.fetch_add(1, Ordering::SeqCst);
-
 
                             let worker = self.clone();
                             let queue_name = queue_name.to_string();
@@ -179,20 +179,15 @@ where
 
                                 // Decrement active task counter
                                 worker.active_tasks.fetch_sub(1, Ordering::SeqCst);
-
-
-
                                 drop(permit);
                             });
                         }
                         Some(Err(e)) => {
                             error!("Worker {}-{} delivery error: {}", self.worker_id, worker_id, e);
-
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                         None => {
                             warn!("Worker {}-{} consumer connection broken", self.worker_id, worker_id);
-
                             break;
                         }
                     }
@@ -205,7 +200,7 @@ where
         }
 
         // Stop the monitor
-        drop(monitor_handle);
+        // drop(monitor_handle);
 
         info!("Worker {}-{} stopped", self.worker_id, worker_id);
     }
@@ -382,14 +377,15 @@ where
                 interval.tick().await;
                 let active = active_tasks.load(Ordering::SeqCst);
                 let available = max_concurrent.saturating_sub(active);
-                println!(
+
+                info!(
                     "[MONITOR] Worker {} - Active: {}/{} (Available: {})",
                     worker_id, active, max_concurrent, available
                 );
 
                 // Alert if we're at capacity
                 if available == 0 {
-                    println!("Worker {} at maximum concurrency!", worker_id);
+                    warn!("Worker {} at maximum concurrency!", worker_id);
                 }
             }
         })
