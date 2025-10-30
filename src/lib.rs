@@ -1,4 +1,4 @@
-//! A robust, distributed job queue system with Redis storage and RabbitMQ backend.
+//! A distributed job queue system with Redis storage and RabbitMQ backend.
 //!
 //! # Features
 //!
@@ -11,7 +11,7 @@
 //! # Quick Start
 //!
 //! ```rust,no_run
-//! use job_queue::{Queue, WorkerOptions, JobOptions, BackoffStrategy};
+//! use rustq::{Queue, WorkerOptions, JobOptions, BackoffStrategy};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Debug, Serialize, Deserialize)]

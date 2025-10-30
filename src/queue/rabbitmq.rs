@@ -5,7 +5,7 @@ use lapin::{
     options::{BasicConsumeOptions, BasicPublishOptions, QueueDeclareOptions},
     types::{AMQPValue, FieldTable},
 };
-use log::{info, warn};
+use log::{error, info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -27,25 +27,49 @@ impl RabbitMQQueue {
         })
     }
 
+    // Reuse available channels or retry if needed
     async fn get_channel(&self) -> Result<Channel> {
+        let mut retries = 3; // Maximum retries
         let mut channel_guard = self.channel.lock().await;
 
-        if channel_guard.is_none()
-            || matches!(
-                channel_guard.as_ref().unwrap().status().state(),
-                ChannelState::Closed | ChannelState::Error | ChannelState::Closing
-            )
-        {
-            *channel_guard = Some(
-                self.connection
-                    .create_channel()
-                    .await
-                    .map_err(|e| JobQueueError::QueueError(e.to_string()))?,
-            );
-            info!("Created new RabbitMQ channel");
-        }
+        loop {
+            // Check if we have a valid channel
+            if channel_guard.is_none()
+                || matches!(
+                    channel_guard.as_ref().unwrap().status().state(),
+                    ChannelState::Closed | ChannelState::Error | ChannelState::Closing
+                )
+            {
+                if retries == 0 {
+                    return Err(JobQueueError::QueueError(
+                        "Max retries reached for channel creation.".to_string(),
+                    ));
+                }
 
-        Ok(channel_guard.as_ref().unwrap().clone())
+                retries -= 1;
+
+                // Retry creating the channel
+                match self.connection.create_channel().await {
+                    Ok(new_channel) => {
+                        *channel_guard = Some(new_channel);
+                        info!("Created new RabbitMQ channel");
+                        return Ok(channel_guard.as_ref().unwrap().clone());
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to create channel, retrying {} times. Error: {}",
+                            retries, e
+                        );
+                        // Exponential backoff for retry attempts
+                        tokio::time::sleep(std::time::Duration::from_secs(2u64.pow(3 - retries)))
+                            .await;
+                    }
+                }
+            } else {
+                // Channel is valid, no need to recreate
+                return Ok(channel_guard.as_ref().unwrap().clone());
+            }
+        }
     }
 
     async fn ensure_queue(&self, queue_name: &str, args: FieldTable) -> Result<()> {
@@ -65,6 +89,10 @@ impl RabbitMQQueue {
 
         Ok(())
     }
+
+    // TODO: implement channel close
+    // TODO: implement retry create connection
+    // TODO: implement priority queue
 }
 
 #[async_trait]

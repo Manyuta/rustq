@@ -139,6 +139,7 @@ where
                     "Worker {}-{} failed to create consumer: {}",
                     self.worker_id, worker_id, e
                 );
+
                 return;
             }
         };
@@ -151,6 +152,8 @@ where
                 delivery = consumer.next() => {
                     match delivery {
                         Some(Ok(delivery)) => {
+
+
                             let permit = match self.task_semaphore.clone().acquire_owned().await {
                                 Ok(permit) => permit,
                                 Err(_) => {
@@ -161,6 +164,7 @@ where
 
                             // Increment active task counter
                             self.active_tasks.fetch_add(1, Ordering::SeqCst);
+
 
                             let worker = self.clone();
                             let queue_name = queue_name.to_string();
@@ -173,15 +177,20 @@ where
 
                                 // Decrement active task counter
                                 worker.active_tasks.fetch_sub(1, Ordering::SeqCst);
+
+
+
                                 drop(permit);
                             });
                         }
                         Some(Err(e)) => {
                             error!("Worker {}-{} delivery error: {}", self.worker_id, worker_id, e);
+
                             tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                         }
                         None => {
                             warn!("Worker {}-{} consumer connection broken", self.worker_id, worker_id);
+
                             break;
                         }
                     }
@@ -208,6 +217,7 @@ where
             Ok(job) => job,
             Err(e) => {
                 error!("Failed to deserialize job: {}", e);
+
                 // Nack malformed messages without requeue
                 delivery
                     .nack(BasicNackOptions {
@@ -258,7 +268,7 @@ where
         let handler = match handlers.get(&job.job_type) {
             Some(handler) => handler,
             None => {
-                warn!("No handler found for the job: {}", &job.id);
+                warn!("No handler found for the job id: {}", job.id);
 
                 if let Err(e) = self
                     .storage
@@ -269,8 +279,8 @@ where
                 }
 
                 return Err(JobQueueError::HandlerError(format!(
-                    "No handler registered for the job ID: {}",
-                    &job.id
+                    "No handler registered for the job id: {}",
+                    job.id
                 )));
             }
         };

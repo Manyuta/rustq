@@ -15,14 +15,11 @@ pub trait JobStorage: Send + Sync {
     /// Update a job's status
     async fn update_job_status(&self, job_id: &str, status: JobStatus) -> Result<()>;
 
-    /// Get all registered job types
+    /// Get all registered job types (TODO: create monitoring tool)
     async fn get_job_types(&self) -> Result<Vec<String>>;
 
-    /// Get count of jobs by status
+    /// Get count of jobs by status (TODO: create monitoring tool)
     async fn get_job_count_by_status(&self, status: JobStatus) -> Result<usize>;
-
-    /// Get recent jobs (for monitoring)
-    async fn get_recent_jobs(&self, limit: usize) -> Result<Vec<Job>>;
 
     /// Check if storage is healthy
     async fn health_check(&self) -> Result<bool>;

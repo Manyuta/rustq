@@ -192,33 +192,4 @@ impl JobStorage for RedisStorage {
             .map_err(|e| JobQueueError::StorageError(e.to_string()))?;
         Ok(count)
     }
-
-    async fn get_recent_jobs(&self, limit: usize) -> Result<Vec<Job>> {
-        let mut conn = self.get_conn().await?;
-
-        // Get recent job IDs from sorted set (most recent firts)
-        let job_ids: Vec<String> = conn
-            .zrevrange(self.jobs_by_created_key(), 0, (limit - 1) as isize)
-            .await
-            .map_err(|e| JobQueueError::StorageError(e.to_string()))?;
-
-        // Use pipeline to get all jobs in one round trip
-        let mut pipe = redis::pipe();
-        for job_id in &job_ids {
-            pipe.get(self.job_data_key(job_id));
-        }
-
-        let job_data: Vec<Option<String>> = pipe
-            .query_async(&mut conn)
-            .await
-            .map_err(|e| JobQueueError::StorageError(e.to_string()))?;
-
-        let mut jobs = Vec::new();
-        for json in job_data.into_iter().flatten() {
-            if let Ok(job) = serde_json::from_str(&json) {
-                jobs.push(job);
-            }
-        }
-        Ok(jobs)
-    }
 }
