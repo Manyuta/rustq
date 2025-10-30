@@ -125,7 +125,9 @@ impl Worker {
 
     /// Start the worker
     pub async fn run(&self) -> Result<()> {
-        self.worker.start(&self.queue_name, 1).await;
+        self.worker
+            .start(&self.queue_name, self.worker.num_workers)
+            .await;
         Ok(())
     }
 
