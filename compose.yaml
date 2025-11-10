@@ -1,0 +1,28 @@
+services:
+  redis:
+    image: redis:latest
+    restart: always
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--notify-keyspace-events", "Ex"]
+
+  rabbitmq:
+    image: rabbitmq:management
+    ports:
+      - "5673:5672" # rabbitmq port
+      - "15672:15672" # rabbitmq management port
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  rabbitmq-data:
+    driver: local
+  redis_data:
+    driver: local
