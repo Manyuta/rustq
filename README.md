@@ -1,8 +1,6 @@
 ## Rust distibuted job queue system
 A distributed job queue built in **Rust** using **RabbitMQ** for message delivery and **Redis** for persistent job storage. It supports asynchronous workers, retries with backoff strategies, and horizontal scalability.
 
-***This project is a capstone project upon completing the rustcamp organized by Ukrainian Rust Community.***
-
 ## Features 
 - **Distributed Queue** - RabbitMQ manages message routing and delivery.
 - **Persistent Storage** - Redis stores job data and status. 
